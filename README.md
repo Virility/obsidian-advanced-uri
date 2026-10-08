@@ -28,6 +28,53 @@ You can for example
 
 Please read the [documentation](https://publish.obsidian.md/advanced-uri-doc) for a detailed explanation.
 
+## Local fork: insert text at the cursor
+
+This is a local fork of [Advanced URI](https://github.com/Vinzent03/obsidian-advanced-uri) that adds an
+`insertatcursor` parameter, so a URI can write into the note you are already editing instead of
+appending to a file.
+
+It is installed under the plugin id `advanced-uri-local` (name *Advanced URI (local)*) so it can sit
+alongside the original plugin in the same vault. The `obsidian://` protocol and every existing parameter
+behave as upstream does.
+
+### Parameters
+
+| Parameter | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `insertatcursor` | text | — | Text to insert into the active editor. Supports the `{{clipboard}}` placeholder, replaced with the system clipboard. |
+| `insertposition` | `caret`, `end` | `caret` | Insert at the cursor, or at the end of the note. |
+| `insertline` | `after`, `under` | `after` | `after` adds a sibling line at the current line's own depth; `under` nests one level beneath the current line. |
+| `insertfallback` | `notice`, `daily` | plugin setting | What to do when no editor is open: `notice` shows the text in a notice, `daily` appends it to today's daily note. |
+
+A URI parameter wins over the matching plugin setting, so a single link can override the default
+without changing your configuration.
+
+### Settings
+
+- **Nest at-cursor inserts under the current line** — makes `insertline=under` the default.
+- **When no editor is open** — makes `insertfallback=daily` the default.
+
+### Example
+
+Insert the clipboard at the cursor in the note that is already open:
+
+```
+obsidian://advanced-uri?insertatcursor={{clipboard}}
+```
+
+Append to the end of the active note instead of at the cursor:
+
+```
+obsidian://advanced-uri?insertatcursor=Some%20text&insertposition=end
+```
+
+Add a nested line beneath the current one, falling back to the daily note when nothing is open:
+
+```
+obsidian://advanced-uri?insertatcursor=A%20sub-item&insertline=under&insertfallback=daily
+```
+
 ## Installation
 
 ### From Obsidian
