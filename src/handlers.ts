@@ -4,6 +4,7 @@ import {
     Notice,
     TAbstractFile,
     TFile,
+    WorkspaceLeaf,
 } from "obsidian";
 import AdvancedURI from "./main";
 import { EnterDataModal } from "./modals/enter_data_modal";
@@ -27,6 +28,16 @@ import {
     KeyPathError,
     waitForFileCache,
 } from "./utils";
+
+/**
+ * Placeholder inside `insertatcursor` that is replaced with the system
+ * clipboard content before the text is inserted.
+ */
+const CLIPBOARD_TOKEN = "{{clipboard}}";
+
+const sleep = (ms: number) =>
+    new Promise((resolve) => window.setTimeout(resolve, ms));
+
 export default class Handlers {
     constructor(private readonly plugin: AdvancedURI) {}
     app = this.plugin.app;
@@ -428,6 +439,194 @@ export default class Handlers {
         const search = view.currentMode.search;
         search.searchInputEl.value = parameters.search;
         search.searchInputEl.dispatchEvent(new Event("input"));
+    }
+
+    /**
+     * Resolves the MarkdownView that "insertatcursor" should target.
+     *
+     * Order: the active markdown leaf, then the most recently used one. The
+     * caller contract sends no `filepath`, so this must work purely off what
+     * the workspace already has open -- it never opens or creates a note.
+     */
+    private resolveInsertionTarget(): MarkdownView | null {
+        const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (active) return active;
+
+        // The active leaf may be a canvas/graph/sidebar pane. Obsidian exposes
+        // no public "recent leaves" list, so use the most recently active leaf
+        // (`getMostRecentLeaf` is documented to reach the root split even while
+        // a sidebar leaf is active), then fall back to scanning open leaves.
+        // This scan is unordered, so it is only a last resort: it can pick a
+        // markdown leaf that is not strictly the most recently used one.
+        const recent = this.app.workspace.getMostRecentLeaf();
+        const recentView =
+            recent?.view instanceof MarkdownView ? recent.view : null;
+        if (recentView) return recentView;
+
+        let found: MarkdownView | null = null;
+        this.app.workspace.iterateAllLeaves((leaf) => {
+            if (!found && leaf.view instanceof MarkdownView) {
+                found = leaf.view;
+            }
+        });
+        return found;
+    }
+
+    /**
+     * Reveals `leaf`, tolerating Obsidian versions that predate
+     * `workspace.revealLeaf` (`@since 1.7.2`; this plugin allows 1.5.7).
+     *
+     * The `setActiveLeaf` fallback makes the leaf active but may not scroll a
+     * background tab into view. That is acceptable here: `editor.focus()` and
+     * the caret re-assert in `focusInsertionTarget()` still run afterwards, so
+     * the insert lands at the caret even when the reveal could not scroll.
+     */
+    private async revealLeafCompat(leaf: WorkspaceLeaf): Promise<void> {
+        const ws: any = this.app.workspace;
+        if (typeof ws.revealLeaf === "function") return ws.revealLeaf(leaf);
+        ws.setActiveLeaf?.(leaf, { focus: true });
+    }
+
+    /**
+     * Makes `view` the active tab, the focused pane, and puts the caret back
+     * where the user left it.
+     */
+    private async focusInsertionTarget(view: MarkdownView): Promise<void> {
+        // revealLeaf MUST run before focus(). Focusing an editor that lives in a
+        // background tab changes nothing the user can see: the leaf is not
+        // rendered, so the caret never paints and scrollIntoView has no visible
+        // effect. revealLeaf activates and renders the leaf first, which is what
+        // makes the subsequent focus() observable.
+        await this.revealLeafCompat(view.leaf);
+
+        // replaceSelection()/caret APIs are only reliable in source mode.
+        const state = view.leaf.getViewState();
+        if (state.state?.mode !== "source") {
+            state.state = { ...state.state, mode: "source" };
+            await view.leaf.setViewState(state, { focus: true });
+            await sleep(10);
+        }
+
+        view.editor.focus();
+
+        // Reveal/refocus can drop the caret association; re-assert it from the
+        // editor's own record so Obsidian repaints and scrolls to where the
+        // user was, instead of inserting at a stale or default position.
+        view.editor.setCursor(view.editor.getCursor());
+
+        // The protocol handler can run while a different window has OS focus.
+        // Electron honours window.focus() here.
+        window.focus();
+    }
+
+    async handleInsertAtCursor(parameters: Parameters) {
+        let view = this.app.workspace.getActiveViewOfType(MarkdownView);
+
+        if (parameters.filepath) {
+            const file = this.app.vault.getAbstractFileByPath(
+                parameters.filepath
+            );
+            if (file instanceof TFile && (!view || view.file?.path !== file.path)) {
+                await this.plugin.open({
+                    file,
+                    setting: this.plugin.settings
+                        .openFileWithoutWriteInNewPane,
+                    parameters: parameters,
+                });
+                await sleep(150);
+                view = this.app.workspace.getActiveViewOfType(MarkdownView);
+            }
+        } else {
+            // No filepath: target whatever the user is looking at, falling back
+            // to the last used markdown leaf rather than silently doing nothing.
+            view = this.resolveInsertionTarget();
+        }
+
+        let text = parameters.insertatcursor;
+        if (text.includes(CLIPBOARD_TOKEN)) {
+            let clipboard: string;
+            try {
+                clipboard = await navigator.clipboard.readText();
+            } catch {
+                // Deliberate abort: inserting the unexpanded token (or a
+                // partially built string) would corrupt the note, so nothing is
+                // written at all.
+                new Notice("Could not read the clipboard");
+                this.plugin.failure(parameters);
+                return;
+            }
+            text = text.split(CLIPBOARD_TOKEN).join(clipboard);
+        }
+
+        if (!view) {
+            // No editor anywhere. The policy comes from the settings: report it and write nothing, or
+            // fall back to today's daily note, which needs no editor at all.
+            const fallback = String(parameters.insertfallback || (this.plugin.settings.insertFallback === "daily" ? "daily" : "notice")).toLowerCase();
+            if (fallback === "daily") {
+                const now = new Date();
+                const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+                new Notice(`No active editor — appended to ${stamp} instead`);
+                await this.handleWrite({ filepath: stamp, data: text, mode: "append", separator: "" } as unknown as Parameters);
+                this.plugin.success(parameters);
+                return;
+            }
+            new Notice("No active editor to insert text into");
+            this.plugin.failure(parameters);
+            return;
+        }
+
+        // Read the mode before inserting so viewmode=preview can be restored
+        // after the insertion has actually completed.
+        const state = view.leaf.getViewState();
+        await this.focusInsertionTarget(view);
+
+        // List-aware insert. The caller sends a markdown list item such as "- [title](url)".
+        // If the caret's line is already a list item (dash, star, plus or an ordered marker), drop the
+        // payload's leading marker so the text continues that list rather than nesting a second one.
+        // On a plain line the marker is kept, so the same URI still starts a list from scratch.
+        // Where the payload lands when the caret's line already has content:
+        //   insertline=after (default) — a new sibling item at the line's own depth;
+        //   insertline=under           — nested one level beneath the line.
+        // Either way the payload's following lines go one level deeper than its first line, so a
+        // multi-link send becomes a parent item with children rather than a flat run.
+        const caret = view.editor.getCursor();
+        const caretLine = view.editor.getLine(caret.line) || "";
+        const listMatch = caretLine.match(/^([ \t]*)([-*+]|\d+[.)])([ \t]+)(.*)$/);
+        const payloadIsListItem = /^[-*+] /.test(text);
+        // insertline= wins when present; otherwise the plugin setting decides.
+        const insertUnder = String(parameters.insertline || (this.plugin.settings.insertUnder ? "under" : "after")).toLowerCase() === "under";
+        if (payloadIsListItem && listMatch && !listMatch[4].trim()) {
+            // Empty list item: fill it in rather than nesting a second marker.
+            text = text.slice(2);
+        } else if (payloadIsListItem && caretLine.trim()) {
+            // Something is already written on this line, so the payload goes after all of it and the
+            // existing text keeps its place and its depth.
+            const base = (listMatch ? listMatch[1] : "") + (insertUnder ? "\t" : "");
+            const markerChar = listMatch ? (/^\d/.test(listMatch[2]) ? "1." : listMatch[2]) : "";
+            const raw = text.slice(listMatch ? 2 : 0).split("\n");
+            // Rebase: drop whatever common indentation the payload already carries, so its own
+            // structure is preserved and each of its following lines ends up exactly one level
+            // deeper than the first instead of two.
+            const tail = raw.slice(1).filter(line => line.trim().length);
+            const common = tail.length ? Math.min(...tail.map(line => (line.match(/^[ \t]*/) || [""])[0].length)) : 0;
+            const body = [raw[0]].concat(raw.slice(1).map(line => (line.length ? line.slice(common) : line)));
+            const head = (markerChar ? markerChar + " " : "") + body[0];
+            const rest = body.slice(1).map(line => (line.length ? base + "\t" + line : line));
+            text = "\n" + base + head + (rest.length ? "\n" + rest.join("\n") : "");
+            view.editor.setCursor({ line: caret.line, ch: caretLine.length });
+        }
+
+        view.editor.replaceSelection(text);
+        const cursor = view.editor.getCursor();
+        view.editor.scrollIntoView({ from: cursor, to: cursor }, true);
+
+        if (parameters.viewmode === "preview") {
+            state.state = { ...state.state, mode: "preview" };
+            await view.leaf.setViewState(state);
+        }
+
+        await sleep(10);
+        this.plugin.success(parameters);
     }
 
     async handleWrite(

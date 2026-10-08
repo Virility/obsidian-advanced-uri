@@ -416,6 +416,26 @@ export default class AdvancedURI extends Plugin {
             await this.handlers.handleDoesFileExist(parameters);
         } else if (parameters.canvasnodes || parameters.canvasviewport) {
             void this.handlers.handleCanvas(parameters);
+        } else if (
+            parameters.insertatcursor != undefined &&
+            parameters.filepath &&
+            parameters.heading != undefined
+        ) {
+            await this.handlers.handleOpen(parameters);
+            parameters.heading = undefined;
+            // Allow for example inserting after going to a heading
+            await this.chooseHandler(parameters, createdDailyNote);
+        } else if (
+            parameters.insertatcursor != undefined &&
+            parameters.filepath &&
+            parameters.block != undefined
+        ) {
+            await this.handlers.handleOpen(parameters);
+            parameters.block = undefined;
+            // Allow for example inserting after going to a block
+            await this.chooseHandler(parameters, createdDailyNote);
+        } else if (parameters.insertatcursor != undefined) {
+            await this.handlers.handleInsertAtCursor(parameters);
         } else if (parameters.data) {
             await this.handlers.handleWrite(parameters, createdDailyNote);
         } else if (parameters.filepath && parameters.heading) {

@@ -26,6 +26,32 @@ export class SettingsTab extends PluginSettingTab {
         );
 
         new Setting(containerEl)
+            .setName("When no editor is open")
+            .setDesc("An insert at the cursor needs a note to insert into. Report it and write nothing, or append to today's daily note instead.")
+            .addDropdown((cb) =>
+                cb
+                    .addOption("notice", "Show a notice, write nothing")
+                    .addOption("daily", "Append to today's daily note")
+                    .setValue(this.plugin.settings.insertFallback || "notice")
+                    .onChange((value) => {
+                        this.plugin.settings.insertFallback = value;
+                        void this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName("Nest at-cursor inserts under the current line")
+            .setDesc("When an insert at the cursor lands on a line that already has content, put the payload one level beneath it instead of at the same level. A URI can override this with insertline=after or insertline=under.")
+            .addToggle((cb) =>
+                cb
+                    .setValue(this.plugin.settings.insertUnder)
+                    .onChange((value) => {
+                        this.plugin.settings.insertUnder = value;
+                        void this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
             .setName("Open file on write in a new pane")
             .setDisabled(this.plugin.settings.openFileOnWrite)
             .addToggle((cb) =>

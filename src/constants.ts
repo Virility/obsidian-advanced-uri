@@ -1,6 +1,8 @@
 import { AdvancedURISettings } from "./types";
 
 export const DEFAULT_SETTINGS: AdvancedURISettings = {
+    insertFallback: "notice",
+    insertUnder: false,
     openFileOnWrite: true,
     openDailyInNewPane: false,
     openFileOnWriteInNewPane: false,

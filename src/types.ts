@@ -123,6 +123,12 @@ export interface FileModalData {
 }
 
 export interface AdvancedURISettings {
+    /** What an insert at the cursor does when no editor is open: "notice" writes nothing and
+     *  reports it, "daily" appends to today's daily note instead. */
+    insertFallback: string;
+    /** When an at-cursor insert lands on a line that already has content, nest the payload one
+     *  level beneath it instead of at the same level. insertline= overrides it per URI. */
+    insertUnder: boolean;
     openFileOnWrite: boolean;
     openFileOnWriteInNewPane: boolean;
     openDailyInNewPane: boolean;
@@ -198,6 +204,15 @@ export interface Parameters {
     canvasviewport?: string;
     confirm?: string;
     offset?: string;
+    /**
+     * Text to insert at the current cursor position of the active editor.
+     * Inserted exactly as given, with no added newlines.
+     * The token `{{clipboard}}` is replaced with the system clipboard content.
+     */
+    insertatcursor?: string;
+    insertposition?: string;
+    insertline?: string;
+    insertfallback?: string;
     "await-sync"?: "true" | "false";
 }
 
